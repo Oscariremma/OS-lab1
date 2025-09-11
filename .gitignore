@@ -245,8 +245,8 @@ cython_debug/
 ## Testing reports ##
 reports/
 
-## direnv ##
-.envrc
-
 ## macOS ##
 .DS_Store
+
+## direnv ##
+.direnv
