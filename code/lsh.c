@@ -37,7 +37,7 @@ static void print_pgm(Pgm *p);
 
 void stripwhite(char *);
 
-int exec_program(const char* program ,char* const *args, bool background);
+int exec_program(Pgm* next_pgm, bool background);
 
 void sigchld_handler(int signum);
 
@@ -67,9 +67,7 @@ int main(void) {
             if (parse(line, &cmd) == 1) {
                 // Just prints cmd
                 print_cmd(&cmd);
-                char* program = cmd.pgm->pgmlist[0];
-                char** args = cmd.pgm->pgmlist;
-                exec_program(program, args, cmd.background);
+                exec_program(cmd.pgm, cmd.background);
             } else {
                 printf("Parse ERROR\n");
             }
@@ -145,18 +143,64 @@ void stripwhite(char *string) {
 }
 
 
-int exec_program(const char* program ,char* const *args, bool background) {
-    printf("%s\n", program);
-    pid_t pid = fork();
-    if (pid < 0) {
-        assert(pid);
-    } else if (pid == 0) {
-        execvp(program, args);
-        perror("execvp failed");
-        exit(-1);
-    } else if (!background) {
-        wait(NULL);
+int exec_program(Pgm * next_pgm, bool background) {
+
+    int count = 0;
+    Pgm *pgm_iter = next_pgm;
+    while (pgm_iter) {
+        count++;
+        pgm_iter = pgm_iter->next;
     }
+
+    int child_index = 0;
+    pid_t children[count];
+    int curr_stdout = STDOUT_FILENO;
+
+    while (next_pgm) {
+        Pgm *curr_pgm = next_pgm;
+        next_pgm = curr_pgm->next;
+
+        const char *program = curr_pgm->pgmlist[0];
+        char **args = curr_pgm->pgmlist;
+
+        int pipefd[2];
+        if (next_pgm) {
+            pipe(pipefd);
+        }
+
+
+        const pid_t pid = fork();
+
+        if (pid < 0) {
+            assert(false);
+        } else if (pid == 0) {
+            if (next_pgm) {
+                close(pipefd[1]);
+                dup2(pipefd[0], STDIN_FILENO);
+            }
+            dup2(curr_stdout, STDOUT_FILENO);
+            execvp(program, args);
+            perror("execvp failed");
+            exit(-1);
+        } else {
+            children[child_index++] = pid;
+            if (next_pgm) {
+                close(pipefd[0]);
+                if (curr_stdout != STDOUT_FILENO) {
+                    close(curr_stdout);
+                }
+                curr_stdout = pipefd[1];
+            }
+        }
+    }
+
+    if (!background) {
+        for (int i = 0; i < child_index; i++) {
+            waitpid(children[i], NULL, 0);
+        }
+    }
+
+
     return 0;
 }
 
