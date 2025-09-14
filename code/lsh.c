@@ -22,11 +22,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <stdbool.h>
 
 // The <unistd.h> header is your gateway to the OS's process management facilities.
-#include <stdbool.h>
 #include <unistd.h>
 
 #include "parse.h"
@@ -37,19 +38,22 @@ static void print_pgm(Pgm *p);
 
 void stripwhite(char *);
 
-int exec_program(Pgm* next_pgm, bool background);
+int exec_program(Pgm *next_pgm, bool background);
 
 void sigchld_handler(int signum);
 
-int main(void) {
+int main(void)
+{
 
     signal(SIGCHLD, sigchld_handler);
 
-    for (;;) {
+    for (;;)
+    {
         char *line;
         line = readline("> ");
 
-        if (line == NULL) {
+        if (line == NULL)
+        {
             // EOF, e.g., user pressed Ctrl-D
             printf("\n");
             free(line);
@@ -60,15 +64,19 @@ int main(void) {
         stripwhite(line);
 
         // If stripped line not blank
-        if (*line) {
+        if (*line)
+        {
             add_history(line);
 
             Command cmd;
-            if (parse(line, &cmd) == 1) {
+            if (parse(line, &cmd) == 1)
+            {
                 // Just prints cmd
                 print_cmd(&cmd);
                 exec_program(cmd.pgm, cmd.background);
-            } else {
+            }
+            else
+            {
                 printf("Parse ERROR\n");
             }
         }
@@ -85,7 +93,8 @@ int main(void) {
  *
  * Helper function, no need to change. Might be useful to study as inspiration.
  */
-static void print_cmd(Command *cmd_list) {
+static void print_cmd(Command *cmd_list)
+{
     printf("------------------------------\n");
     printf("Parse OK\n");
     printf("stdin:      %s\n", cmd_list->rstdin ? cmd_list->rstdin : "<none>");
@@ -100,10 +109,14 @@ static void print_cmd(Command *cmd_list) {
  *
  * Helper function, no need to change. Might be useful to study as inpsiration.
  */
-static void print_pgm(Pgm *p) {
-    if (p == NULL) {
+static void print_pgm(Pgm *p)
+{
+    if (p == NULL)
+    {
         return;
-    } else {
+    }
+    else
+    {
         char **pl = p->pgmlist;
 
         /* The list is in reversed order so print
@@ -111,102 +124,154 @@ static void print_pgm(Pgm *p) {
          */
         print_pgm(p->next);
         printf("            * [ ");
-        while (*pl) {
+        while (*pl)
+        {
             printf("%s ", *pl++);
         }
         printf("]\n");
     }
 }
 
-
 /* Strip whitespace from the start and end of a string.
  *
  * Helper function, no need to change.
  */
-void stripwhite(char *string) {
+void stripwhite(char *string)
+{
     size_t i = 0;
 
-    while (isspace(string[i])) {
+    while (isspace(string[i]))
+    {
         i++;
     }
 
-    if (i) {
+    if (i)
+    {
         memmove(string, string + i, strlen(string + i) + 1);
     }
 
     i = strlen(string) - 1;
-    while (i > 0 && isspace(string[i])) {
+    while (i > 0 && isspace(string[i]))
+    {
         i--;
     }
 
     string[++i] = '\0';
 }
 
-
-int exec_program(Pgm * next_pgm, bool background) {
+int exec_program(Pgm *pgm_list, bool background)
+{
+    if (pgm_list == NULL)
+        return 0;
 
     int count = 0;
-    Pgm *pgm_iter = next_pgm;
-    while (pgm_iter) {
+    Pgm *pgm_iter = pgm_list;
+    while (pgm_iter)
+    {
         count++;
         pgm_iter = pgm_iter->next;
     }
 
-    int child_index = 0;
+    // Commands in right to left order
+    Pgm *commands[count]; 
+
     pid_t children[count];
-    int curr_stdout = STDOUT_FILENO;
 
-    while (next_pgm) {
-        Pgm *curr_pgm = next_pgm;
-        next_pgm = curr_pgm->next;
+    pgm_iter = pgm_list;
+    for (int i = count - 1; i >= 0; i--)
+    {
+        commands[i] = pgm_iter;
+        pgm_iter = pgm_iter->next;
+    }
 
-        const char *program = curr_pgm->pgmlist[0];
-        char **args = curr_pgm->pgmlist;
+    int input_fd = -1;
 
-        int pipefd[2];
-        if (next_pgm) {
-            pipe(pipefd);
+    for (int i = 0; i < count; i++)
+    {
+        Pgm *cmd = commands[i];
+        const char *program = cmd->pgmlist[0];
+        char **args = cmd->pgmlist;
+
+        int pipefd[2] = {-1, -1};
+        bool has_next = (i < count - 1);
+
+        if (has_next)
+        {
+            if (pipe(pipefd) == -1)
+            {
+                perror("pipe failed");
+                exit(-1);
+            }
         }
 
+        pid_t pid = fork();
+        if (pid < 0)
+        {
+            perror("fork failed");
+            exit(-1);
+        }
+        else if (pid == 0)
+        {
+            // Child process
 
-        const pid_t pid = fork();
-
-        if (pid < 0) {
-            assert(false);
-        } else if (pid == 0) {
-            if (next_pgm) {
-                close(pipefd[1]);
-                dup2(pipefd[0], STDIN_FILENO);
+            if (input_fd != -1)
+            {
+                dup2(input_fd, STDIN_FILENO);
+                close(input_fd);
             }
-            dup2(curr_stdout, STDOUT_FILENO);
+
+            if (has_next)
+            {
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[1]);
+                close(pipefd[0]);
+            }
+
             execvp(program, args);
             perror("execvp failed");
             exit(-1);
-        } else {
-            children[child_index++] = pid;
-            if (next_pgm) {
-                close(pipefd[0]);
-                if (curr_stdout != STDOUT_FILENO) {
-                    close(curr_stdout);
-                }
-                curr_stdout = pipefd[1];
+        }
+        else
+        {
+            // Parent process
+            
+            children[i] = pid;
+
+            if (input_fd != -1)
+            {
+                close(input_fd);
+            }
+
+            if (has_next)
+            {
+                close(pipefd[1]);
+                input_fd = pipefd[0];
             }
         }
     }
 
-    if (!background) {
-        for (int i = 0; i < child_index; i++) {
+    if (input_fd != -1)
+    {
+        close(input_fd);
+    }
+
+    if (!background)
+    {
+        for (int i = 0; i < count; i++)
+        {
             waitpid(children[i], NULL, 0);
         }
     }
 
-
     return 0;
 }
 
-void sigchld_handler(int signum) {
-    if (signum != SIGCHLD) {
+void sigchld_handler(int signum)
+{
+    if (signum != SIGCHLD)
+    {
         return;
     }
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
 }
