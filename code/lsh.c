@@ -26,6 +26,7 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <stdbool.h>
+#include <fcntl.h>
 
 // The <unistd.h> header is your gateway to the OS's process management facilities.
 #include <unistd.h>
@@ -38,7 +39,7 @@ static void print_pgm(Pgm *p);
 
 void stripwhite(char *);
 
-int exec_program(Pgm *next_pgm, bool background);
+int exec_program(Command *cmd);
 
 void sigchld_handler(int signum);
 
@@ -73,7 +74,7 @@ int main(void)
             {
                 // Just prints cmd
                 print_cmd(&cmd);
-                exec_program(cmd.pgm, cmd.background);
+                exec_program(&cmd);
             }
             else
             {
@@ -159,10 +160,12 @@ void stripwhite(char *string)
     string[++i] = '\0';
 }
 
-int exec_program(Pgm *pgm_list, bool background)
+int exec_program(Command *cmd)
 {
-    if (pgm_list == NULL)
+    if (cmd == NULL)
         return 0;
+
+    Pgm *pgm_list = cmd->pgm;
 
     int count = 0;
     Pgm *pgm_iter = pgm_list;
@@ -186,11 +189,19 @@ int exec_program(Pgm *pgm_list, bool background)
 
     int input_fd = -1;
 
+    if (cmd->rstdin) {
+        input_fd = open(cmd->rstdin, O_RDONLY);
+        if (input_fd < 0) {
+            perror("Failed to open input file");
+            return -1;
+        }
+    }
+
     for (int i = 0; i < count; i++)
     {
-        Pgm *cmd = commands[i];
-        const char *program = cmd->pgmlist[0];
-        char **args = cmd->pgmlist;
+        Pgm *pgm = commands[i];
+        const char *program = pgm->pgmlist[0];
+        char **args = pgm->pgmlist;
 
         int pipefd[2] = {-1, -1};
         bool has_next = (i < count - 1);
@@ -226,6 +237,15 @@ int exec_program(Pgm *pgm_list, bool background)
                 close(pipefd[1]);
                 close(pipefd[0]);
             }
+            else if (cmd->rstdout) {
+                int output_fd = open(cmd->rstdout, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (output_fd < 0) {
+                    perror("Failed to open output file");
+                    exit(-1);
+                }
+                dup2(output_fd, STDOUT_FILENO);
+                close(output_fd);
+            }
 
             execvp(program, args);
             perror("execvp failed");
@@ -255,7 +275,7 @@ int exec_program(Pgm *pgm_list, bool background)
         close(input_fd);
     }
 
-    if (!background)
+    if (!cmd->background)
     {
         for (int i = 0; i < count; i++)
         {
