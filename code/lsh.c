@@ -51,6 +51,7 @@ void send_sighup();
 
 int main(void) {
     signal(SIGCHLD, sigchld_handler);
+    signal(SIGINT, sigint_handler);
 
     for (;;) {
         char *line;
