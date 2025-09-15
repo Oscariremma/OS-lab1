@@ -33,6 +33,8 @@
 
 #include "parse.h"
 
+static int current_foreground_group_id = -1;
+
 static void print_cmd(Command *cmd);
 
 static void print_pgm(Pgm *p);
@@ -42,6 +44,8 @@ void stripwhite(char *);
 int exec_program(Command *cmd);
 
 void sigchld_handler(int signum);
+
+void sigint_handler(int signum);
 
 void send_sighup();
 
@@ -216,6 +220,8 @@ int exec_program(Command *cmd) {
 
     pid_t children[count];
 
+    pid_t group_id = -1;
+
     pgm_iter = pgm_list;
     for (int i = count - 1; i >= 0; i--) {
         commands[i] = pgm_iter;
@@ -293,6 +299,14 @@ int exec_program(Command *cmd) {
 
             children[i] = pid;
 
+            if (group_id == -1)
+                group_id = pid;
+
+            if (setpgid(pid, group_id)) {
+                perror("setpgid failed");
+                exit(-1);
+            }
+
             if (input_fd != -1) {
                 close(input_fd);
             }
@@ -309,11 +323,13 @@ int exec_program(Command *cmd) {
     }
 
     if (!cmd->background) {
+        current_foreground_group_id = group_id;
         for (int i = 0; i < count; i++) {
             if (children[i] != 0) {
                 waitpid(children[i], NULL, 0);
             }
         }
+        current_foreground_group_id = -1;
     }
 
     return 0;
@@ -324,4 +340,13 @@ void sigchld_handler(int signum) {
         return;
     }
     while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
+void sigint_handler(int signum) {
+    if (signum != SIGINT) {
+        return;
+    }
+    if (current_foreground_group_id != -1) {
+        kill(-current_foreground_group_id, SIGINT);
+    }
 }
