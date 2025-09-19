@@ -250,3 +250,5 @@ reports/
 
 ## direnv ##
 .direnv
+
+.vscode/

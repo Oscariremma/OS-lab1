@@ -216,7 +216,7 @@ int exec_program(Command *cmd) {
         pgm_iter = pgm_iter->next;
     }
 
-    // Commands in right to left order
+    // Commands in left to right order
     Pgm *commands[count];
 
     pid_t children[count];
